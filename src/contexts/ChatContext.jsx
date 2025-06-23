@@ -101,6 +101,7 @@ export const ChatProvider = ({ children }) => {
       setInterval(() => {
         websocketService.sendActivity();
       }, 30000);
+
     } catch (error) {
       console.error("Failed to initialize chat:", error);
       dispatch({ type: "SET_ERROR", payload: error.message });
@@ -109,10 +110,30 @@ export const ChatProvider = ({ children }) => {
     }
   };
 
+  const loadConversations = async () => {
+    try {
+      const conversations = await apiService.getConversations();
+      dispatch({ type: "SET_CONVERSATIONS", payload: conversations });
+    } catch (error) {
+      console.error("Failed to load conversations:", error);
+      dispatch({ type: "SET_ERROR", payload: error.message });
+    }
+  };
+
   const setupWebSocketHandlers = () => {
     // New messages
     websocketService.addMessageHandler("newMessage", (message) => {
       dispatch({ type: "ADD_MESSAGE", payload: message });
+
+      // Update conversation với last message
+      dispatch({
+        type: "UPDATE_CONVERSATION",
+        payload: {
+          id: message.conversationId,
+          lastMessage: message,
+          lastActivity: new Date().toISOString(),
+        },
+      });
 
       // Mark as delivered if not from current user
       if (message.fromUserId !== state.currentUser?.id) {
@@ -152,8 +173,7 @@ export const ChatProvider = ({ children }) => {
 
     // Presence updates
     websocketService.addMessageHandler("presenceUpdate", (presenceUpdate) => {
-      // Update online users or user status
-      console.log("Presence update:", presenceUpdate);
+      dispatch({ type: "SET_ONLINE_USERS", payload: presenceUpdate.onlineUsers });
     });
 
     // Message status updates
@@ -177,12 +197,76 @@ export const ChatProvider = ({ children }) => {
     });
   };
 
-  const loadConversations = async () => {
+  // Tạo conversation với user từ user list
+  const startConversationWithUser = async (user) => {
     try {
-      const conversations = await apiService.getConversations();
-      dispatch({ type: "SET_CONVERSATIONS", payload: conversations });
+      dispatch({ type: "SET_LOADING", payload: true });
+
+      const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+
+      // Gọi API tạo hoặc tìm conversation 1-on-1 với userId trong path
+      const response = await fetch(`http://localhost:8600/conversation/find-or-create-1on1/${user.id}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const conversation = await response.json();
+      
+      // Tạo conversation object để add vào state
+      const newConversation = {
+        id: conversation.id,
+        name: user.fullName || user.username,
+        avatar: user.avatar,
+        isGroup: false,
+        lastMessage: null,
+        lastActivity: new Date().toISOString(),
+        unreadCount: 0,
+        members: [
+          {
+            id: state.currentUser?.id,
+            name: state.currentUser?.fullName,
+            avatar: state.currentUser?.avatar
+          },
+          {
+            id: user.id,
+            name: user.fullName || user.username,
+            avatar: user.avatar
+          }
+        ]
+      };
+
+      // Check if conversation already exists in state
+      const existingConversation = state.conversations.find(conv => conv.id === conversation.id);
+      
+      if (!existingConversation) {
+        dispatch({ type: "ADD_CONVERSATION", payload: newConversation });
+      }
+
+      // Set as current conversation
+      dispatch({ type: "SET_CURRENT_CONVERSATION", payload: conversation.id });
+
+      // Load messages for this conversation
+      await loadMessages(conversation.id);
+
+      // Reload conversations để có latest data
+      await loadConversations();
+
+      // Show success notification
+      console.log(`Đã tạo cuộc trò chuyện với ${user.fullName || user.username}`);
+
     } catch (error) {
-      console.error("Failed to load conversations:", error);
+      console.error('Error creating conversation:', error);
+      dispatch({ type: "SET_ERROR", payload: 'Không thể tạo cuộc trò chuyện' });
+      throw error;
+    } finally {
+      dispatch({ type: "SET_LOADING", payload: false });
     }
   };
 
@@ -196,39 +280,26 @@ export const ChatProvider = ({ children }) => {
           (c) => c.id === state.currentConversationId
         );
         websocketService.unsubscribe(
-          `/chat/${prevConv?.isGroup ? "group" : "user"}/${
-            state.currentConversationId
-          }`
+          `/chat/${prevConv?.isGroup ? "group" : "user"}/${state.currentConversationId}`
         );
-        websocketService.unsubscribe(
-          `/chat/typing/${state.currentConversationId}`
-        );
-        websocketService.unsubscribe(
-          `/chat/reaction/${state.currentConversationId}`
-        );
+        websocketService.unsubscribe(`/chat/typing/${state.currentConversationId}`);
+        websocketService.unsubscribe(`/chat/reaction/${state.currentConversationId}`);
       }
 
       // Set current conversation
       dispatch({ type: "SET_CURRENT_CONVERSATION", payload: conversationId });
 
       // Subscribe to new conversation
-      const conversation = state.conversations.find(
-        (c) => c.id === conversationId
-      );
-      websocketService.subscribeToConversation(
-        conversationId,
-        conversation?.isGroup
-      );
+      const conversation = state.conversations.find((c) => c.id === conversationId);
+      websocketService.subscribeToConversation(conversationId, conversation?.isGroup);
       websocketService.subscribeToTyping(conversationId);
       websocketService.subscribeToReactions(conversationId);
 
       // Load message history
-      const messageHistory = await apiService.getMessageHistory(conversationId);
-      dispatch({ type: "SET_MESSAGES", payload: messageHistory.content || [] });
+      await loadMessages(conversationId);
 
       // Mark conversation as read
-      await apiService.markConversationAsRead(conversationId);
-      websocketService.markConversationAsRead(conversationId);
+      await markAsRead(conversationId);
     } catch (error) {
       console.error("Failed to select conversation:", error);
       dispatch({ type: "SET_ERROR", payload: error.message });
@@ -237,7 +308,17 @@ export const ChatProvider = ({ children }) => {
     }
   };
 
-  const sendMessage = async (content, files = null, replyMessageId = null) => {
+  const loadMessages = async (conversationId, page = 0) => {
+    try {
+      const messageHistory = await apiService.getMessageHistory(conversationId, page);
+      dispatch({ type: "SET_MESSAGES", payload: messageHistory.content || [] });
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+      dispatch({ type: "SET_ERROR", payload: error.message });
+    }
+  };
+
+  const sendMessage = async (content, type = "TEXT", replyTo = null, files = null) => {
     if (!state.currentConversationId || !content.trim()) return;
 
     try {
@@ -249,30 +330,16 @@ export const ChatProvider = ({ children }) => {
         );
       }
 
+      // Send via WebSocket
       websocketService.sendMessage(
         state.currentConversationId,
         content,
         attachments,
-        replyMessageId
+        replyTo
       );
+
     } catch (error) {
       console.error("Failed to send message:", error);
-      dispatch({ type: "SET_ERROR", payload: error.message });
-    }
-  };
-
-  const createConversation = async (userIds, groupName = null) => {
-    try {
-      const payload = {
-        userIds,
-        groupName,
-      };
-
-      const conversation = await apiService.createConversation(payload);
-      dispatch({ type: "ADD_CONVERSATION", payload: conversation });
-      return conversation;
-    } catch (error) {
-      console.error("Failed to create conversation:", error);
       dispatch({ type: "SET_ERROR", payload: error.message });
       throw error;
     }
@@ -294,6 +361,39 @@ export const ChatProvider = ({ children }) => {
     });
   };
 
+  const createConversation = async (userIds, groupName = null) => {
+    try {
+      const payload = {
+        userIds,
+        groupName,
+      };
+
+      const conversation = await apiService.createConversation(payload);
+      dispatch({ type: "ADD_CONVERSATION", payload: conversation });
+      dispatch({ type: "SET_CURRENT_CONVERSATION", payload: conversation.id });
+
+      return conversation;
+    } catch (error) {
+      console.error("Failed to create conversation:", error);
+      dispatch({ type: "SET_ERROR", payload: error.message });
+      throw error;
+    }
+  };
+
+  const markAsRead = async (conversationId) => {
+    try {
+      await apiService.markConversationAsRead(conversationId);
+      websocketService.markConversationAsRead(conversationId);
+      
+      dispatch({
+        type: "UPDATE_CONVERSATION",
+        payload: { id: conversationId, unreadCount: 0 },
+      });
+    } catch (error) {
+      console.error("Failed to mark as read:", error);
+    }
+  };
+
   const sendTyping = (isTyping) => {
     if (state.currentConversationId) {
       websocketService.sendTyping(state.currentConversationId, isTyping);
@@ -304,11 +404,19 @@ export const ChatProvider = ({ children }) => {
     websocketService.sendReaction(messageId, emoji);
   };
 
+  const clearError = () => {
+    dispatch({ type: "SET_ERROR", payload: null });
+  };
+
   const value = {
     ...state,
     selectConversation,
+    loadMessages,
     sendMessage,
     createConversation,
+    markAsRead,
+    clearError,
+    startConversationWithUser, // New function for starting conversation with user from user list
     sendTyping,
     addReaction,
     loadConversations,

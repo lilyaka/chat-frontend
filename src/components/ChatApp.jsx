@@ -1,11 +1,13 @@
-import React from "react";
+import React, { useState } from "react";
 import ConversationList from "./ConversationList";
 import ChatWindow from "./ChatWindow";
+import UserListPanel from "./UserListPanel";
 import { useChat } from "../contexts/ChatContext";
-import { LogOut } from "lucide-react";
+import { LogOut, MessageCircle, Users, UserPlus } from "lucide-react";
 
 const ChatApp = ({ onLogout }) => {
   const { currentConversationId, currentUser, loading, error } = useChat();
+  const [activeTab, setActiveTab] = useState('conversations');
 
   if (loading) {
     return (
@@ -32,6 +34,23 @@ const ChatApp = ({ onLogout }) => {
     );
   }
 
+  const tabs = [
+    {
+      id: 'conversations',
+      label: 'Cuộc trò chuyện',
+      icon: MessageCircle,
+      component: ConversationList
+    },
+    {
+      id: 'users',
+      label: 'Người dùng',
+      icon: UserPlus,
+      component: UserListPanel
+    }
+  ];
+
+  const ActiveTabComponent = tabs.find(tab => tab.id === activeTab)?.component || ConversationList;
+
   return (
     <div className="h-screen flex bg-gray-100">
       {/* Sidebar */}
@@ -44,8 +63,11 @@ const ChatApp = ({ onLogout }) => {
             </div>
             <div>
               <p className="font-semibold">{currentUser?.fullName || "User"}</p>
-              <p className="text-sm mt-1 text-gray-500">
-                Create a new conversation or select an existing one
+              <p className="text-sm text-gray-500">
+                {activeTab === 'conversations' 
+                  ? 'Tạo cuộc trò chuyện mới hoặc chọn cuộc trò chuyện' 
+                  : 'Tìm kiếm và chat với người dùng khác'
+                }
               </p>
             </div>
           </div>
@@ -58,9 +80,32 @@ const ChatApp = ({ onLogout }) => {
           </button>
         </div>
 
-        {/* Conversation list */}
-        <div className="flex-1 overflow-y-auto">
-          <ConversationList />
+        {/* Tab Navigation */}
+        <div className="border-b">
+          <div className="flex">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 text-sm font-medium border-b-2 transition-colors ${
+                    activeTab === tab.id
+                      ? 'border-blue-500 text-blue-600 bg-blue-50'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Tab Content */}
+        <div className="flex-1 overflow-hidden">
+          <ActiveTabComponent />
         </div>
       </div>
 
@@ -70,7 +115,27 @@ const ChatApp = ({ onLogout }) => {
           <ChatWindow conversationId={currentConversationId} />
         ) : (
           <div className="h-full flex items-center justify-center text-gray-500">
-            Select a conversation to start chatting.
+            <div className="text-center">
+              <div className="mb-4">
+                {activeTab === 'conversations' ? (
+                  <MessageCircle className="w-16 h-16 mx-auto text-gray-300" />
+                ) : (
+                  <UserPlus className="w-16 h-16 mx-auto text-gray-300" />
+                )}
+              </div>
+              <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                {activeTab === 'conversations' 
+                  ? 'Chọn cuộc trò chuyện' 
+                  : 'Bắt đầu chat mới'
+                }
+              </h3>
+              <p className="text-gray-500">
+                {activeTab === 'conversations' 
+                  ? 'Chọn một cuộc trò chuyện từ danh sách để bắt đầu chat.' 
+                  : 'Tìm kiếm người dùng và click để bắt đầu cuộc trò chuyện mới.'
+                }
+              </p>
+            </div>
           </div>
         )}
       </div>
