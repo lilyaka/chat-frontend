@@ -1,0 +1,26 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .message-bubble {
+    @apply max-w-xs lg:max-w-md px-4 py-2 rounded-lg break-words;
+  }
+  
+  .message-own {
+    @apply bg-blue-500 text-white ml-auto;
+  }
+  
+  .message-other {
+    @apply bg-gray-200 text-gray-800;
+  }
+  
+  .conversation-item {
+    @apply flex items-center p-3 hover:bg-gray-100 cursor-pointer border-b;
+  }
+  
+  .conversation-active {
+    @apply bg-blue-50 border-l-4 border-blue-500;
+  }
+}
